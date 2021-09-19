@@ -123,8 +123,8 @@ type msg_queue struct {
 	qtype    string
 }
 
-func next4handle(tx *sql.Tx, params *worker_params) (*msg_queue, error) {
-	row := tx.QueryRow(get_file_txt("next_msg.sql"), params.queue_type)
+func next4handle(tx *sql.Tx, next_sql string, params *worker_params) (*msg_queue, error) {
+	row := tx.QueryRow(next_sql, params.queue_type)
 
 	var msg_id int64
 	var order_id int64
@@ -156,6 +156,7 @@ func handle_queue(db *sql.DB, params *worker_params, res chan *handle_result, qu
 	defer wg.Done()
 	pb := make_pbar(params.pb, params.total_msg, fmt.Sprintf("worker %d [%s]", params.worker_num, params.queue_type))
 	done := false
+	next_sql := get_file_txt("next_msg.sql")
 
 	for !done {
 		tx, err := db.Begin()
@@ -163,7 +164,7 @@ func handle_queue(db *sql.DB, params *worker_params, res chan *handle_result, qu
 			log.Fatalln(err)
 		}
 
-		mq, err := next4handle(tx, params)
+		mq, err := next4handle(tx, next_sql, params)
 		if err != nil {
 			tx.Rollback()
 		}

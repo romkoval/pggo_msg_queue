@@ -6,7 +6,7 @@ Usage of ./pggo_msg_queue:
   -delmsg
         delete message from queue when handled
   -dsn string
-        pg connect string (default "postgres://etick_test:etick@localhost/etick_test")
+        pg connect string (default "postgres://test:test@localhost/test")
   -fill-db int
         fill db with rand data (default 1000)
   -logfile string
@@ -42,13 +42,33 @@ create unique index msg_queue_uniq_msg_id on msg_queue(msg_id);
 
 * Задержка обработки (эмуляция полезной работы над сообщением): random(1-10) ms
 
+#### Пример
+
+Запущено 3 обработчика очереди Type1.
+
+| msg_id | queue_type | status | order_id |          time_added           | time_processed |
+-------- | -----------| -------| ---------| ------------------------------| ---------------- |
+|   1 | type1      | N      |        1 | 2021-09-18 23:57:53.48036+03  | |
+|   2 | type1      | N      |        2 | 2021-09-18 23:57:53.525959+03 | |
+|   3 | type1      | N      |        2 | 2021-09-18 23:57:53.544526+03 | |
+|   4 | type1      | N      |        1 | 2021-09-18 23:57:53.584574+03 | |
+|   5 | type1      | N      |        1 | 2021-09-18 23:57:53.624685+03 | |
+
+Первые два обработчика успеют взять msg_id 1 и 2, остальные обработчики получат no data found, так как все сообщения с отличающимеся order_id уже в работе.
+
+| handler | msg_id | order_id |
+|------|-----|------|
+| handler 1 | 1 | 1 |
+| handler 2 | 2 | 2 |
+| handler 3 | not found | not found |
+
 
 ### Запрос на новое сообщение из очереди
 
 Запрос читается из файла `next_msg.sql`
 
 ``` sql
-with next_msg as (
+      with next_msg as (
         select msg_id from msg_queue mq
         where
             queue_type = $1
@@ -62,12 +82,12 @@ with next_msg as (
                             and time_added <= mq.time_added)
         limit 1
         for update skip locked
-    )
-    update msg_queue mq
+     )
+     update msg_queue mq
         set status='P'
         from next_msg
         where mq.msg_id = next_msg.msg_id
-    returning mq.msg_id, mq.queue_type, mq.order_id
+     returning mq.msg_id, mq.queue_type, mq.order_id
 ```
 
 ## Запуск
@@ -99,4 +119,8 @@ go build
 
 * (+) все обработчики максимально заняты, нет необходимости назначать номер обработчика заранее. Очередь обрабатывается равномерно с соблюдением очередности `order_id` и типа очереди `queue_type`
 * (-) если обработчиков для одного типа сообщений больше чем количество уникальных order_id, то каждый из них, кому не хватило сообщения из данной группы, получить `not found` и будет спать какое-то время, например, 1 сек.
-* (-) для более быстрой обработки нового сообщения, приходится делать короткий интервал сна. Высокий рейт полинга.
+* (-) для более быстрой обработки нового сообщения, приходится делать короткий интервал сна. Высокий рейт полинга. ***
+
+ *** Можно посылать сигнал в первый (или случайный) обработчик группы при поступлении нового сообщения на обработку, тогда если обработчик не зарят и сообщения с таким типом и order_id не в работе, сообщение будет обработано сразу.
+Если обработчик занят, он попробует взять сообщение сразу после завершения обработки предыдущего.
+Если обработчик не занят и не смог взять сообщение в работу, так как все сообщения данного типа и order_id в работе, оно будет взято первым освободившимся обработчиком.

@@ -25,6 +25,44 @@ func get_msg_types() []string {
 	return []string{"type1", "type2", "type3"}
 }
 
+func main() {
+	var cfg Config
+	cfg.Init()
+	setupLogger(cfg.logfile)
+
+	db, err := connect_db(cfg)
+	defer db.Close()
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	create_schema(db, cfg.schema)
+
+	if cfg.fill_db > 0 && cfg.rate == 0 {
+		fill_queue(err, db, cfg)
+	}
+
+	res_chan := make(chan *handle_result, 10)
+	quit := make(chan int, 1)
+	var wg sync.WaitGroup
+
+	pb := mpb.New(mpb.WithWaitGroup(&wg))
+	wg.Add(cfg.workers)
+
+	total_pb := make_pbar(pb, cfg.fill_db, "total")
+
+	run_handlers(cfg, pb, db, res_chan, quit, wg)
+
+	if cfg.rate > 0 {
+		wg.Add(1)
+		go fill_queue_with_rate(cfg.rate, cfg.fill_db, db, &wg, quit)
+	}
+
+	print_results(res_chan, total_pb, db, cfg, quit)
+
+	wg.Wait()
+}
+
 func get_file_txt(fname string) string {
 	data, err := ioutil.ReadFile(fname)
 	if err != nil {
@@ -213,7 +251,7 @@ type Config struct {
 }
 
 func (cfg *Config) Init() {
-	dsn := flag.String("dsn", "postgres://etick_test:etick@localhost/etick_test", "pg connect string")
+	dsn := flag.String("dsn", "postgres://test:test@localhost/test", "pg connect string")
 	schema := flag.String("schema", "schema.sql", "pg schema to create table & indexes")
 	fill_db := flag.Int64("fill-db", 1000, "fill db with rand data")
 	logfile := flag.String("logfile", "msg_queue.log", "logfile name, use '-' for stdout")
@@ -231,44 +269,6 @@ func (cfg *Config) Init() {
 		rate:    *rate,
 		delmsg:  *delmsg,
 	}
-}
-
-func main() {
-	var cfg Config
-	cfg.Init()
-	setupLogger(cfg.logfile)
-
-	db, err := connect_db(cfg)
-	defer db.Close()
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	create_schema(db, cfg.schema)
-
-	if cfg.fill_db > 0 && cfg.rate == 0 {
-		fill_queue(err, db, cfg)
-	}
-
-	res_chan := make(chan *handle_result, 10)
-	quit := make(chan int, 1)
-	var wg sync.WaitGroup
-
-	pb := mpb.New(mpb.WithWaitGroup(&wg))
-	wg.Add(cfg.workers)
-
-	total_pb := make_pbar(pb, cfg.fill_db, "total")
-
-	run_handlers(cfg, pb, db, res_chan, quit, wg)
-
-	if cfg.rate > 0 {
-		wg.Add(1)
-		go fill_queue_with_rate(cfg.rate, cfg.fill_db, db, &wg, quit)
-	}
-
-	print_results(res_chan, total_pb, db, cfg, quit)
-
-	wg.Wait()
 }
 
 func connect_db(cfg Config) (*sql.DB, error) {
